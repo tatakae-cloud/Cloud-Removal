@@ -3,7 +3,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-# exploratory code_still in development.
+"""
+EXPLORATORY CODE - NOT TRAINED
+
+This implements the CNN architecture from the TimeGate paper but uses
+RANDOM UNTRAINED WEIGHTS. This will NOT produce good results.
+
+The validated results (SSIM 0.9) come from deterministic approach.
+
+This code is included for:
+- Future work
+- Architectural reference
+- Understanding the full TimeGate model
+
+DO NOT USE THIS FOR GENERATING RESULTS.
+"""
 # ============================================================================
 # Algorithm 1: Temporal Feature Extraction (g function)
 # ============================================================================
