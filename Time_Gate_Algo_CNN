@@ -1,0 +1,306 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+
+# ============================================================================
+# Algorithm 1: Temporal Feature Extraction (g function)
+# ============================================================================
+
+class TemporalFeatureExtractor(nn.Module):
+    """
+    Algorithm 1 from the paper - function g.
+    Extracts temporal features with decay and conditioning.
+    """
+    
+    def __init__(self, n_channels=13, hidden_dim=64):
+        super(TemporalFeatureExtractor, self).__init__()
+        
+        # Input: T, Mx, Cx (image + missing mask + cloud coverage)
+        input_dim = n_channels + 1 + 2  # bands + missing(1) + cloud(2)
+        
+        # Line 2: point_conv_decay for temporal decay
+        self.point_conv_decay = nn.Conv2d(1, 1, kernel_size=1, bias=True)
+        
+        # Line 4: point_conv_combine
+        self.point_conv_combine = nn.Conv2d(input_dim, hidden_dim, kernel_size=1)
+        self.bn_combine = nn.BatchNorm2d(hidden_dim)
+        
+        # Line 5: point_conv_cond for conditioning
+        self.point_conv_cond = nn.Conv2d(3, hidden_dim, kernel_size=1)  # Cy(2) + My(1)
+        
+        # Line 7: spatial conv(3x3) + point_conv_out
+        self.conv = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        self.bn_conv = nn.BatchNorm2d(hidden_dim)
+        
+        self.point_conv_out = nn.Conv2d(hidden_dim, n_channels, kernel_size=1)
+        
+    def forward(self, T, Mx, Cx, My, Cy, delta_y):
+        """
+        Algorithm 1 from paper.
+        
+        function g(T, Mx, Cx, My, Cy, delta_y)
+            decay ← exp(-max(point_conv_decay(delta_y), 0))
+            X ← concat(T, Mx ⊙ decay, Cx, dim=1)
+            X ← point_conv_combine(X)
+            cond ← point_conv_cond(concat(Cy, My, dim=1))
+            X ← X + repeat(cond, t)
+            X ← point_conv_out(conv(X))
+            return X
+        
+        Args:
+            T: (t, cin, h, w) - image time series
+            Mx: (t, 1, h, w) - missingness indicator (0=missing, 1=valid)
+            Cx: (t, 2, h, w) - cloud coverage (0=cloud, 1=clear)
+            My: (1, 1, h, w) - target missingness
+            Cy: (1, 2, h, w) - target cloud coverage
+            delta_y: (t, 1, 1, 1) - temporal distance to target
+        
+        Returns:
+            X: (t, cin, h, w) - temporal features
+        """
+        t, cin, h, w = T.shape
+        
+        # Line 2: decay ← exp(-max(point_conv_decay(delta_y), 0))
+        decay = torch.exp(-torch.clamp(self.point_conv_decay(delta_y), min=0))
+        decay_broadcast = decay.expand(t, 1, h, w)
+        Mx_decayed = Mx * decay_broadcast
+        
+        # Line 3: X ← concat(T, Mx ⊙ decay, Cx, dim=1)
+        X = torch.cat([T, Mx_decayed, Cx], dim=1)
+        
+        # Line 4: X ← point_conv_combine(X)
+        X = self.point_conv_combine(X)
+        X = self.bn_combine(X)
+        X = F.mish(X)
+        
+        # Line 5: cond ← point_conv_cond(concat(Cy, My, dim=1))
+        cond_input = torch.cat([Cy, My], dim=1)
+        cond = self.point_conv_cond(cond_input)
+        
+        # Line 6: X ← X + repeat(cond, t)
+        cond_repeated = cond.expand(t, -1, -1, -1)
+        X = X + cond_repeated
+        
+        # Line 7: X ← point_conv_out(conv(X))
+        X = self.conv(X)
+        X = self.bn_conv(X)
+        X = F.mish(X)
+        X = self.point_conv_out(X)
+        
+        return X
+
+
+# ============================================================================
+# Algorithm 2: Time-Gating Mechanism
+# ============================================================================
+
+class TimeGate(nn.Module):
+    """
+    Algorithm 2 from the paper.
+    Aggregates time series into single image using learned gating.
+    """
+    
+    def __init__(self, n_channels=13, hidden_dim=64):
+        super(TimeGate, self).__init__()
+        
+        # g: temporal feature extractor (Algorithm 1)
+        self.g = TemporalFeatureExtractor(n_channels, hidden_dim)
+        
+        # Point-wise conv for additional features (Line 5)
+        self.point_conv_hagg = nn.Conv2d(n_channels, hidden_dim, kernel_size=1)
+        
+    def forward(self, T, Mx, Cx, My, Cy, delta_y):
+        """
+        Algorithm 2 from paper.
+        
+        function time_gate(T, Mx, Cx, Cy, delta_y)
+            H_time ← exp(max(g(T, Mx, Cx, Cy, delta_y), 0)) - 1
+            H_w ← H_time ⊙ (1 / (Σ H_time + ε))
+            X ← Σ(H_w_i ⊙ T_i)
+            H_agg ← max(point_conv(H_time), dim=0)
+            return X, H_agg
+        
+        Args:
+            T: (t, cin, h, w) - image time series
+            Mx: (t, 1, h, w) - missingness indicator
+            Cx: (t, 2, h, w) - cloud coverage
+            My: (1, 1, h, w) - target missingness
+            Cy: (1, 2, h, w) - target cloud coverage
+            delta_y: (t, 1, 1, 1) - temporal distance
+        
+        Returns:
+            X: (cin, h, w) - aggregated single image
+            H_agg: (hidden_dim, h, w) - additional temporal features
+        """
+        epsilon = 1e-10
+        
+        # Line 2: H_time ← exp(max(g(...), 0)) - 1
+        H_time = self.g(T, Mx, Cx, My, Cy, delta_y)
+        H_time = torch.exp(torch.clamp(H_time, min=0)) - 1
+        
+        # Line 3: H_w ← H_time ⊙ (1 / (Σ H_time + ε))
+        H_sum = torch.sum(H_time, dim=0, keepdim=True) + epsilon
+        H_w = H_time / H_sum
+        
+        # Line 4: X ← Σ(H_w_i ⊙ T_i)
+        X = torch.sum(H_w * T, dim=0)
+        
+        # Line 5: H_agg ← max(point_conv(H_time), dim=0)
+        t, cin, h, w = H_time.shape
+        H_conv = self.point_conv_hagg(H_time.view(t, cin, h, w))
+        H_agg, _ = torch.max(H_conv, dim=0)
+        
+        return X, H_agg
+
+
+# ============================================================================
+# Wrapper Function for Easy Integration
+# ============================================================================
+
+def run_timegate(stack, cloud_masks, missing_masks, temporal_decay=0.15, 
+                 target_cloud_mask=None, target_missing_mask=None,
+                 return_weights=False):
+    """
+    Run TimeGate algorithms on satellite image time series.
+    
+    Args:
+        stack: (T, C, H, W) - numpy array of images
+        cloud_masks: (T, 2, H, W) - cloud and shadow masks (1=clear, 0=cloud)
+        missing_masks: (T, H, W) - missing data masks (1=valid, 0=missing)
+        temporal_decay: float - decay parameter
+        target_cloud_mask: (2, H, W) - target conditioning (None for inference)
+        target_missing_mask: (H, W) - target conditioning (None for inference)
+        return_weights: bool - whether to return H_w weights
+    
+    Returns:
+        composite: (C, H, W) - aggregated composite image
+        H_agg: (hidden_dim, H, W) - temporal features (optional)
+        weights: (T, C, H, W) - gating weights (if return_weights=True)
+    """
+    T, C, H, W = stack.shape
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Convert to tensors
+    T_tensor = torch.from_numpy(stack).float().to(device)
+    Mx = torch.from_numpy(missing_masks[:, np.newaxis]).float().to(device)
+    Cx = torch.from_numpy(cloud_masks).float().to(device)
+    
+    # Temporal distances
+    delta_y = torch.arange(T-1, -1, -1, dtype=torch.float32, device=device)
+    delta_y = temporal_decay * delta_y.view(T, 1, 1, 1)
+    
+    # Target conditioning (set to distortion-free for inference)
+    if target_missing_mask is None:
+        My = torch.zeros(1, 1, H, W, device=device)
+    else:
+        My = torch.from_numpy(target_missing_mask[np.newaxis, np.newaxis]).float().to(device)
+    
+    if target_cloud_mask is None:
+        Cy = torch.ones(1, 2, H, W, device=device)
+    else:
+        Cy = torch.from_numpy(target_cloud_mask[np.newaxis]).float().to(device)
+    
+    # Initialize TimeGate model
+    model = TimeGate(n_channels=C, hidden_dim=64).to(device)
+    model.eval()
+    
+    # Forward pass
+    with torch.no_grad():
+        X, H_agg = model(T_tensor, Mx, Cx, My, Cy, delta_y)
+        
+        # Optionally compute weights for visualization
+        if return_weights:
+            H_time = model.g(T_tensor, Mx, Cx, My, Cy, delta_y)
+            H_time = torch.exp(torch.clamp(H_time, min=0)) - 1
+            H_sum = torch.sum(H_time, dim=0, keepdim=True) + 1e-10
+            H_w = H_time / H_sum
+            
+            return X.cpu().numpy(), H_agg.cpu().numpy(), H_w.cpu().numpy()
+    
+    return X.cpu().numpy(), H_agg.cpu().numpy()
+
+
+# ============================================================================
+# Example Usage with Your Existing Code
+# ============================================================================
+
+def integrate_with_existing_code(stack, quality_masks, temporal_decay=0.15):
+    """
+    Example showing how to replace your existing timegate_with_fmask function.
+    
+    Args:
+        stack: (T, C, H, W) - your image stack
+        quality_masks: (T, H, W) - your Fmask quality masks
+        temporal_decay: float - decay parameter
+    
+    Returns:
+        composite: (C, H, W) - cloud-free composite
+        avg_weights: (T, H, W) - average weights per timestep
+    """
+    T, C, H, W = stack.shape
+    
+    # Prepare cloud masks (2 channels: cloud + shadow)
+    # Using same mask for both channels (you can separate if you have both)
+    cloud_masks = np.stack([quality_masks, quality_masks], axis=1)
+    
+    # Missing masks (same as quality masks in your case)
+    missing_masks = quality_masks
+    
+    # Run TimeGate
+    composite, H_agg, weights = run_timegate(
+        stack, 
+        cloud_masks, 
+        missing_masks, 
+        temporal_decay=temporal_decay,
+        return_weights=True
+    )
+    
+    # Average weights across channels for visualization
+    avg_weights = np.mean(weights, axis=1)
+    
+    return composite, avg_weights
+
+
+# ============================================================================
+# Example with Random Data
+# ============================================================================
+
+if __name__ == "__main__":
+    print("TimeGate Algorithm Demo (No U-Net)\n")
+    
+    # Example dimensions
+    T, C, H, W = 30, 13, 256, 256
+    
+    # Random data
+    stack = np.random.rand(T, C, H, W).astype(np.float32) * 10000
+    cloud_masks = np.random.rand(T, 2, H, W).astype(np.float32)
+    missing_masks = np.random.rand(T, H, W).astype(np.float32)
+    
+    print(f"Input shape: {stack.shape}")
+    print(f"Cloud masks shape: {cloud_masks.shape}")
+    print(f"Missing masks shape: {missing_masks.shape}\n")
+    
+    # Run TimeGate
+    print("Running TimeGate algorithms...")
+    composite, H_agg, weights = run_timegate(
+        stack, 
+        cloud_masks, 
+        missing_masks,
+        return_weights=True
+    )
+    
+    print(f"\n✅ Composite shape: {composite.shape}")
+    print(f"✅ Temporal features shape: {H_agg.shape}")
+    print(f"✅ Weights shape: {weights.shape}")
+    
+    # Average weights across channels
+    avg_weights = np.mean(weights, axis=1)
+    print(f"✅ Average weights per timestep shape: {avg_weights.shape}")
+    
+    # Show contribution percentages
+    print("\nTemporal contribution per timestep:")
+    for t in range(T):
+        contribution = np.mean(avg_weights[t]) * 100
+        print(f"  Timestep {t:2d}: {contribution:5.2f}%")
