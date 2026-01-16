@@ -106,7 +106,7 @@ Cloud-Removal/
 │   ├── TimeGate_ALGO_CNN.ipynb
 │   # CNN-based TimeGate aggregation approach (work in progress)
 │
-├── Timegate_ALGO_deterministic_approach.ipynb
+├── Timegate_ALGO_determenistic2.ipynb
 │   # Deterministic (non-learning) TimeGate baseline method
 │
 ├── UNET_Training.ipynb
