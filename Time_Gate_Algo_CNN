@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-
+`# exploratory code_still in developmen.
 # ============================================================================
 # Algorithm 1: Temporal Feature Extraction (g function)
 # ============================================================================
