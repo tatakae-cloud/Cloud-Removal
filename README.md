@@ -90,16 +90,36 @@ visual information from optical imagery.
 ```
 Cloud-Removal/
 │
-├── 2020_AMC_Creating_Cloud_Free_*.pdf   # Reference research paper
-├── PE_Report_Cloud_Removal.pdf         # Final technical report
+├── 2020_AMC_Creating_Cloud_Free_Satellite_Imagery.pdf
+│   └── Reference research paper (AMC 2020)
 │
-├── Timegate_ALGO.ipynb                 # TimeGate aggregation implementation
-├── Temporal_Features_extractor.ipynb   # Temporal feature extraction
-├── UNET_Training.ipynb                 # U-Net training and validation
-├── Terramind_Finetune.ipynb            # TerraMind fine-tuning pipeline
-├── Testing_using_Actual_weights.ipynb  # Model evaluation and testing
+├── PE_Report_Cloud_Removal.pdf
+│   └── Detailed project / performance evaluation report
 │
-├── readme.md                           # Project documentation
+├── README.md
+│   └── Project overview, methodology, and usage instructions
+│
+├── Temporal_Features_extractor.ipynb
+│   └── Extraction of temporal features from multi-date satellite imagery
+│
+├── Time_Gate_Algo_CNN/
+│   ├── TimeGate_ALGO_CNN.ipynb -> still in progress(on going)
+│   └── CNN-based TimeGate aggregation approach
+│
+├── Timegate_ALGO_deterministic_approach.ipynb
+│   └── Deterministic (non-learning) TimeGate baseline method
+│
+├── UNET_Training.ipynb
+│   └── U-Net model training and validation for cloud removal
+│
+├── Terramind_Finetune.ipynb
+│   └── Fine-tuning TerraMind model for cloud-free image generation
+│
+├── Testing_using_GlobalTerramind_weights.ipynb
+│   └── Evaluation using pretrained/global TerraMind weights
+│
+└── .gitignore (optional / implied)
+
 ```
 
 ---
