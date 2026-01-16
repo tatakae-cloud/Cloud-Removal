@@ -4,19 +4,26 @@ import torch.nn.functional as F
 import numpy as np
 
 """
-EXPLORATORY CODE - NOT TRAINED
+EXPLORATORY / ARCHITECTURAL IMPLEMENTATION — NOT TRAINED
 
-This implements the CNN architecture from the TimeGate paper but uses
-RANDOM UNTRAINED WEIGHTS. This will NOT produce good results.
+This notebook implements the CNN-based TimeGate architecture as described
+in the reference paper. However, the network uses RANDOM, UNTRAINED WEIGHTS
+and has NOT been optimized or validated.
 
-The validated results (SSIM 0.9) come from deterministic approach.
+As a result:
+- This code WILL NOT produce meaningful cloud-free imagery
+- Output quality is NOT representative of the TimeGate method
 
-This code is included for:
-- Future work
-- Architectural reference
-- Understanding the full TimeGate model
+All validated quantitative results (e.g., SSIM ≈ 0.9) reported in this project
+are obtained from the DETERMINISTIC TimeGate approach, not from this CNN model.
 
-DO NOT USE THIS FOR GENERATING RESULTS.
+This notebook is included strictly for:
+- Architectural completeness
+- Future work and extensions
+- Conceptual understanding of the full TimeGate framework
+
+⚠️ DO NOT use this notebook for result generation or performance evaluation.
+
 """
 # ============================================================================
 # Algorithm 1: Temporal Feature Extraction (g function)
