@@ -151,4 +151,4 @@ annotations suitable for cloud removal and reconstruction tasks.
 - Integration of SAR imagery to handle persistent cloud cover
 - Expansion to additional satellite platforms
 - Real-time cloud-free image generation pipelines
-- Ensemble approaches combining multiple reconstruction models
+- Ensemble approaches combining multiple reconstruction models.
